@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control del carro por gestos (Bluetooth)</title>
+</head>
+<body>
+  <button id="conectar">1. Conectar micro:bit</button>
+  <button id="iniciar">2. Iniciar cámara</button>
+  <p>Gesto: <b id="gesto">-</b></p>
+  <p>Orden enviada: <b id="orden">-</b></p>
+  <div id="cam"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    const URL_IMAGEN = "https://teachablemachine.withgoogle.com/models/c8BNHih7R/";
+    const UMBRAL = 0.85;
+
+    const UART_SERVICE = "6e400001-b5a0-f393-e0a9-e50e24dcca9e";
+    const UART_RX = "6e400002-b5a0-f393-e0a9-e50e24dcca9e";
+
+    const GESTOS = {
+      "adelante": "A",
+      "atras": "R",
+      "parar": "S",
+      "nada": "S"
+    };
+
+    const limpiar = t => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+    let rx = null;
+    let ultimaOrden = "";
+
+    document.getElementById("conectar").onclick = async () => {
+      try {
+        const dispositivo = await navigator.bluetooth.requestDevice({
+          filters: [{ namePrefix: "BBC micro:bit" }],
+          optionalServices: [UART_SERVICE]
+        });
+        dispositivo.addEventListener("gattserverdisconnected", () => {
+          rx = null;
+          ultimaOrden = "";
+          alert("micro:bit desconectado");
+        });
+        const servidor = await dispositivo.gatt.connect();
+        const servicio = await servidor.getPrimaryService(UART_SERVICE);
+        rx = await servicio.getCharacteristic(UART_RX);
+        alert("micro:bit conectado");
+      } catch (e) {
+        alert("No se pudo conectar: " + e.message);
+      }
+    };
+
+    async function enviar(orden) {
+      if (!rx || orden === ultimaOrden) return;
+      ultimaOrden = orden;
+      try {
+        await rx.writeValueWithoutResponse(new TextEncoder().encode(orden + "\n"));
+        document.getElementById("orden").textContent = orden;
+      } catch (e) {
+        ultimaOrden = "";
+      }
+    }
+
+    document.getElementById("iniciar").onclick = async () => {
+      const modelo = await tmImage.load(URL_IMAGEN + "model.json", URL_IMAGEN + "metadata.json");
+      const camara = new tmImage.Webcam(300, 300, true);
+      await camara.setup();
+      await camara.play();
+      document.getElementById("cam").appendChild(camara.canvas);
+
+      async function bucle() {
+        camara.update();
+        const pred = await modelo.predict(camara.canvas);
+        const mejor = pred.reduce((a, b) => (a.probability > b.probability ? a : b));
+        if (mejor.probability >= UMBRAL) {
+          const nombre = limpiar(mejor.className);
+          document.getElementById("gesto").textContent = mejor.className;
+          if (GESTOS[nombre]) enviar(GESTOS[nombre]);
+        }
+        requestAnimationFrame(bucle);
+      }
+      bucle();
+    };
+  </script>
+</body>
+</html>
